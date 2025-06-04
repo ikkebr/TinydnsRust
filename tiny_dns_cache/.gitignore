@@ -1,0 +1,7 @@
+# Ignore Cargo build artifacts
+target/
+
+# Ignore Cargo.lock if it's a library and you want users to resolve dependencies,
+# but for this project, since it also has a binary and for reproducible builds,
+# we'll keep it. If this were strictly a library, you might add:
+# Cargo.lock
