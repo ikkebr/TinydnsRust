@@ -108,7 +108,7 @@ impl Cache {
     ///
     /// let mut cache = Cache::new(None);
     /// cache.put("example.com", RecordType::A, vec![Ipv4Addr::new(1,2,3,4).into()], 60);
-    /// assert!(!cache.len() == 0); // Cache is not empty
+    /// assert_eq!(cache.len(), 1); // Cache should have one entry
     ///
     /// cache.clear();
     /// assert_eq!(cache.len(), 0); // Cache is now empty
@@ -150,16 +150,26 @@ impl Cache {
     /// cache.put("example.com", RecordType::A, vec![ip], 300); // TTL of 5 minutes
     /// ```
     pub fn put(&mut self, domain: &str, record_type: RecordType, ips: Vec<IpAddr>, ttl_seconds: u32) {
+        if self.max_size == Some(0) {
+            return; // Do not add any entries if cache capacity is zero
+        }
+
         let expiry = Instant::now() + Duration::from_secs(ttl_seconds as u64);
         let key = (domain.to_string(), record_type.clone());
 
         if self.entries.contains_key(&key) {
+            // If key exists, we are updating. Remove from current position in order queue.
             self.order.retain(|k| k != &key);
-        }
-
-        if self.max_size.is_some() && self.entries.len() >= self.max_size.unwrap() && !self.entries.contains_key(&key) {
-            if let Some(oldest_key) = self.order.pop_front() {
-                self.entries.remove(&oldest_key);
+        } else {
+            // Key does not exist, this is a new entry. Check for eviction.
+            // Eviction only happens for *new* entries when cache is at max_size.
+            // Note: max_size cannot be Some(0) here due to the check above.
+            if let Some(max) = self.max_size {
+                if self.entries.len() >= max {
+                    if let Some(oldest_key) = self.order.pop_front() {
+                        self.entries.remove(&oldest_key);
+                    }
+                }
             }
         }
 
@@ -438,5 +448,96 @@ mod tests {
         assert_eq!(cache.len(), 1);
         assert_eq!(cache.get(TEST_DOMAIN, RecordType::A), None, "Original (updated) entry should be evicted");
         assert_eq!(cache.get(TEST_DOMAIN_2, RecordType::A), Some(ips3.clone()));
+    }
+
+    #[test]
+    fn test_put_with_max_size_zero() {
+        let mut cache = Cache::new(Some(0));
+        let ips = vec![new_ipv4(1, 2, 3, 4)];
+
+        // Attempt to put an entry
+        cache.put(TEST_DOMAIN, RecordType::A, ips.clone(), 60);
+
+        // With max_size = 0, the cache should not store the entry.
+        // Current behavior might be that it stores 1 item.
+        // This test will highlight the current behavior.
+        // For now, let's assert what we expect: nothing should be stored.
+        // If this fails, it indicates a potential logic bug for max_size=0.
+        assert_eq!(cache.len(), 0, "Cache with max_size 0 should not store entries");
+        assert_eq!(cache.get(TEST_DOMAIN, RecordType::A), None, "No entry should be retrievable from cache with max_size 0");
+
+        // Try putting another one, should still be zero
+        let ips2 = vec![new_ipv4(5,6,7,8)];
+        cache.put(TEST_DOMAIN_2, RecordType::A, ips2.clone(), 60);
+        assert_eq!(cache.len(), 0, "Cache with max_size 0 should remain empty");
+    }
+
+    #[test]
+    fn test_purge_expired_on_empty_cache() {
+        let mut cache = Cache::new(None);
+        assert_eq!(cache.len(), 0, "Cache should be initially empty");
+        cache.purge_expired(); // Should run without panic or error
+        assert_eq!(cache.len(), 0, "Cache should remain empty after purge_expired on empty cache");
+    }
+
+    #[test]
+    fn test_purge_expired_with_no_expired_entries() {
+        let mut cache = Cache::new(None);
+        let ips = vec![new_ipv4(1, 1, 1, 1)];
+        cache.put(TEST_DOMAIN, RecordType::A, ips.clone(), 300); // Long TTL
+        cache.put(TEST_DOMAIN_2, RecordType::AAAA, vec![new_ipv6()], 300); // Long TTL
+
+        assert_eq!(cache.len(), 2, "Cache should have two entries");
+        cache.purge_expired(); // Should not remove any entries
+        assert_eq!(cache.len(), 2, "Cache should still have two entries after purge_expired with no expired items");
+        assert!(cache.get(TEST_DOMAIN, RecordType::A).is_some(), "First entry should still exist");
+        assert!(cache.get(TEST_DOMAIN_2, RecordType::AAAA).is_some(), "Second entry should still exist");
+    }
+
+    #[test]
+    fn test_distinct_record_types_for_same_domain() {
+        let mut cache = Cache::new(None);
+        let ips_a = vec![new_ipv4(1, 2, 3, 4)];
+        let ips_aaaa = vec![new_ipv6()];
+
+        cache.put(TEST_DOMAIN, RecordType::A, ips_a.clone(), 60);
+        cache.put(TEST_DOMAIN, RecordType::AAAA, ips_aaaa.clone(), 60);
+
+        assert_eq!(cache.len(), 2, "Cache should contain two distinct entries for the same domain with different record types");
+        assert_eq!(cache.get(TEST_DOMAIN, RecordType::A), Some(ips_a.clone()), "Should retrieve A record");
+        assert_eq!(cache.get(TEST_DOMAIN, RecordType::AAAA), Some(ips_aaaa.clone()), "Should retrieve AAAA record");
+
+        // Test expiration and removal of one does not affect the other
+        cache.put("other.com", RecordType::A, vec![new_ipv4(5,5,5,5)], 1); // Expires quickly
+        thread::sleep(Duration::from_secs(2));
+        cache.purge_expired(); // This will remove "other.com"
+
+        assert_eq!(cache.get(TEST_DOMAIN, RecordType::A), Some(ips_a), "A record for TEST_DOMAIN should still exist");
+        assert_eq!(cache.get(TEST_DOMAIN, RecordType::AAAA), Some(ips_aaaa), "AAAA record for TEST_DOMAIN should still exist");
+        assert_eq!(cache.len(), 2, "Cache should still have 2 entries for TEST_DOMAIN");
+    }
+
+    #[test]
+    fn test_put_behavior_with_max_size_one() {
+        // This test clarifies behavior when max_size is 1.
+        let mut cache = Cache::new(Some(1));
+        let ips1 = vec![new_ipv4(1,1,1,1)];
+        let ips2 = vec![new_ipv4(2,2,2,2)];
+
+        cache.put(TEST_DOMAIN, RecordType::A, ips1.clone(), 60);
+        assert_eq!(cache.len(), 1);
+        assert_eq!(cache.get(TEST_DOMAIN, RecordType::A), Some(ips1.clone()));
+
+        // Putting a new, different entry should evict the first one.
+        cache.put(TEST_DOMAIN_2, RecordType::A, ips2.clone(), 60);
+        assert_eq!(cache.len(), 1);
+        assert_eq!(cache.get(TEST_DOMAIN, RecordType::A), None, "First entry should be evicted");
+        assert_eq!(cache.get(TEST_DOMAIN_2, RecordType::A), Some(ips2.clone()), "Second entry should be present");
+
+        // Updating the existing entry (now TEST_DOMAIN_2) should not change len
+        let ips3 = vec![new_ipv4(3,3,3,3)];
+        cache.put(TEST_DOMAIN_2, RecordType::A, ips3.clone(), 60);
+        assert_eq!(cache.len(), 1);
+        assert_eq!(cache.get(TEST_DOMAIN_2, RecordType::A), Some(ips3.clone()), "Updated entry should be present");
     }
 }
