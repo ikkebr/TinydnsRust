@@ -33,12 +33,16 @@ jobs:
           toolchain: stable # Ensure a specific toolchain if needed, or let it default
       - name: Install cargo-tarpaulin
         run: cargo install cargo-tarpaulin --version 0.27.1 # Pin version for stability
+        working-directory: ./tiny_dns_cache
       - name: Build (optional, tarpaulin often builds)
         run: cargo build --verbose
+        working-directory: ./tiny_dns_cache
       - name: Run tests (cargo test)
         run: cargo test --verbose
+        working-directory: ./tiny_dns_cache
       - name: Generate code coverage report (LCOV)
         run: cargo tarpaulin --verbose --out Lcov --output-dir ./coverage/ --run-types Tests --workspace --all-targets --exclude-files src/main.rs
+        working-directory: ./tiny_dns_cache
         # Exclude main.rs as it's just a placeholder
         # The --output-dir is important for Codecov to find the report
       - name: Upload coverage reports to Codecov
