@@ -42,8 +42,6 @@ jobs:
         # Exclude main.rs as it's just a placeholder
         # The --output-dir is important for Codecov to find the report
       - name: Upload coverage reports to Codecov
-        uses: codecov/codecov-action@v3
+        uses: codecov/codecov-action@v5
         with:
-          files: ./coverage/lcov.info # Path to the LCOV report
-          token: ${{ secrets.CODECOV_TOKEN }} # Only if needed for private repos
-          fail_ci_if_error: true
+            token: ${{ secrets.CODECOV_TOKEN }}
