@@ -45,5 +45,5 @@ jobs:
         uses: codecov/codecov-action@v3
         with:
           files: ./coverage/lcov.info # Path to the LCOV report
-          # token: ${{ secrets.CODECOV_TOKEN }} # Only if needed for private repos
+          token: ${{ secrets.CODECOV_TOKEN }} # Only if needed for private repos
           fail_ci_if_error: true
